@@ -6,7 +6,7 @@ This repository contains the backend for a Shopping Cart application.
 
 Before making changes, read:
 
-* `README.md` (if present)
+* `README.md`
 * `docs/product.md`
 * `docs/architecture.md`
 
