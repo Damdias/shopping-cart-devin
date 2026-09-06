@@ -1,0 +1,26 @@
+# .NET build outputs
+bin/
+obj/
+
+# User-specific files
+*.user
+*.suo
+*.userprefs
+
+# IDE files
+.vs/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test results
+TestResults/
+coverage/
+
+# NuGet
+*.nupkg
