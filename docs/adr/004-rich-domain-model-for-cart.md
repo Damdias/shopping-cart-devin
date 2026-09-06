@@ -17,15 +17,20 @@ Examples include:
 - inactive products already in the cart may remain visible
 - quantity for an inactive product cannot be increased
 - clearing a cart removes all line items but keeps the cart itself
+- `CartItem` stores a snapshot of the product name and unit price
+- later catalog price changes do not alter existing cart items
 
 If these rules are implemented only in API endpoints or application handlers,
 they may be duplicated or bypassed.
 
 ## Decision
 
-Use a rich domain model for the Cart aggregate.
+Use a rich domain model for the `Cart` aggregate.
 
-The Cart aggregate will own and enforce core cart invariants and operations.
+The `Cart` aggregate will own and enforce core cart invariants and operations.
+`Product` and `Cart` are separate aggregates; `CartItem` stores the `ProductId`,
+product name, and unit price as a snapshot. Later catalog price changes do not
+alter existing cart items.
 
 Application handlers coordinate use cases but should not duplicate domain rules.
 
@@ -59,16 +64,17 @@ Responsible for:
 - Clear
 - enforcing quantity limits
 - preventing invalid state
+- storing product name and unit price snapshots in `CartItem`
 
 ### Application layer / feature handler
 
 Responsible for:
 
 - loading Cart
-- loading Product
+- loading Product data needed by the use case
 - checking external data needed by the use case
 - calling Cart behavior
-- saving changes
+- committing the unit of work
 - returning the response
 
 ### Infrastructure

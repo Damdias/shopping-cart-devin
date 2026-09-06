@@ -23,14 +23,16 @@ Provide a lightweight backend service that allows customers to discover products
 
 ### Browse products
 - The system shall expose a list of products.
-- Each product summary shall include at minimum: id, name, and price.
+- Each product summary shall include: id, name, price, and imageUrl.
 
 ### View a product
-- The system shall return product details for a given product id, including a primary image.
+- The system shall return product details for a given product id, including id, name, description, price, imageUrl, and isActive.
 - If the product does not exist or is inactive, the system shall return a not-found indication.
 
 ### Create a cart
-- The system shall return an existing active cart for the customer if one exists; otherwise, it shall create a new, empty cart and return a cart identifier.
+- The system shall require an `X-Anonymous-Customer-Id` header containing a valid UUID v4.
+- The system shall return an existing active cart for the customer, with `200 OK` and an `ETag` header, if one exists; otherwise, it shall create a new, empty cart and return a cart identifier with `201 Created`, a `Location` header, and an `ETag` header.
+- The system shall enforce only one active cart per anonymous customer.
 
 ### Add to cart
 - Given a cart id and a product id, the system shall add the product to the cart.
@@ -52,8 +54,10 @@ Provide a lightweight backend service that allows customers to discover products
 - The cart identifier remains valid and the cart remains available for further use.
 
 ### View cart
-- The system shall return the list of items in the cart, including products that have become inactive, each with product summary, current unit price, quantity, and line total.
-- The system shall return the cart total, computed as the sum of line totals.
+- The system shall return the cart identifier, list of items, cart total, and currency.
+- The system shall return the list of items in the cart, including products that have become inactive, each with productId, name, unit price snapshot, quantity, and line total.
+- The system shall return the cart total, computed as the sum of rounded line totals.
+- Line totals are rounded to 2 decimal places using `MidpointRounding.AwayFromZero`.
 
 ## 5. Business rules
 
@@ -64,7 +68,11 @@ Provide a lightweight backend service that allows customers to discover products
 - Products that become inactive after being added to a cart remain visible; their quantity may be reduced or the item removed, but increasing the quantity is not allowed.
 - Adding an existing product to a cart increments its quantity, up to a maximum of 99.
 - Updating an item quantity to zero removes the line item from the cart.
-- Line totals and the cart total are calculated using each product's current price.
+- Each line item stores a snapshot of the product name and unit price captured when the item is added.
+- Line totals and the cart total are calculated using the unit price snapshot; later catalog price changes do not alter existing cart items.
+- Money values use C# `decimal`, persisted as `numeric(18,2)` in PostgreSQL.
+- The single currency is LKR.
+- Line totals are rounded to 2 decimal places using `MidpointRounding.AwayFromZero`; the cart total is the sum of rounded line totals.
 - There is no maximum number of distinct products in a cart.
 - Clearing a cart removes all line items; the cart itself is not deleted.
 
@@ -72,11 +80,11 @@ Provide a lightweight backend service that allows customers to discover products
 
 - The product catalog is pre-populated and read-only for the MVP.
 - Each product has one primary image. Multiple images are future scope.
-- A single currency is used; no currency conversion is required.
+- The single currency is LKR; no currency conversion is required.
 - Product availability is represented only by an active/inactive flag.
 - Customers are anonymous. Authentication is not required.
 - Carts do not expire automatically in the MVP.
-- Concurrent updates to the same cart are out of scope; last-write-wins behavior is acceptable.
+- Cart updates use optimistic concurrency.
 
 ## 7. Out-of-scope items
 
@@ -94,9 +102,6 @@ Provide a lightweight backend service that allows customers to discover products
 - Cart expiration, idle timeout, and abandoned-cart cleanup
 - Product-list pagination, filtering, sorting, and search
 
-## 8. Open questions
+## 8. Resolved decisions
 
-- Where will product catalog data come from and how will it be seeded for development and testing?
-- What is the technical mechanism for identifying an anonymous customer and their active cart?
-- What is the intended persistence strategy for carts (in-memory, relational database, file-based)?
-- What rounding rules apply to monetary totals?
+The open product and architecture questions have been resolved and are recorded in the ADRs and this document.

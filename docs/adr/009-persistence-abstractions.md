@@ -53,7 +53,7 @@ Example responsibilities:
 - get cart by id
 - get active cart for a customer identifier
 - add a new cart
-- persist aggregate changes
+- track aggregate changes for the unit of work
 
 Example interface:
 
@@ -81,11 +81,16 @@ The Application layer should not need to understand EF Core query details.
 
 ## Unit of Work
 
-Use a unit-of-work abstraction only if required to coordinate persistence
-explicitly.
+Use a minimal `IUnitOfWork` abstraction to commit the unit of work once per
+application command.
 
-Because EF Core DbContext already provides unit-of-work behavior,
-avoid creating unnecessary abstractions unless they add application value.
+`IUnitOfWork` is defined in `ShoppingCart.Application` and implemented in
+`ShoppingCart.Infrastructure` using EF Core's `DbContext`. It exposes
+`SaveChangesAsync(CancellationToken)` so the Application layer can commit
+without referencing EF Core.
+
+Repositories do not call `SaveChanges` internally. They load, add, or update
+aggregates and rely on the handler to commit through `IUnitOfWork`.
 
 ## Infrastructure
 
