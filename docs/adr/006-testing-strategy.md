@@ -28,8 +28,10 @@ Use two primary test levels:
 
 Use xUnit as the test framework.
 
-Integration tests should run against a real PostgreSQL instance using
-container-based test infrastructure.
+Integration tests run against a real PostgreSQL instance provisioned by
+Testcontainers for .NET. The tests drive the API using ASP.NET Core's
+`WebApplicationFactory` and apply the real EF Core migration history to the
+disposable test database.
 
 ## Unit Tests
 
@@ -59,22 +61,25 @@ Integration tests should verify behavior across application boundaries.
 
 Examples:
 
-- GET /api/products returns seeded products
-- GET /api/products/{id} returns 404 for unknown product
-- POST /api/carts creates a cart
-- POST /api/carts/{id}/items persists an item
-- GET /api/carts/{id} returns persisted cart state
+- GET /api/v1/products returns seeded products
+- GET /api/v1/products/{id} returns 404 for unknown product
+- POST /api/v1/carts creates a cart
+- POST /api/v1/carts/{id}/items persists an item
+- GET /api/v1/carts/{id} returns persisted cart state
 - invalid requests return ProblemDetails
 - EF Core migrations apply successfully
 - database constraints behave as expected
 
 ## Test Database
 
-Integration tests should use an isolated PostgreSQL instance.
+Integration tests use an isolated, disposable PostgreSQL container managed by
+Testcontainers for .NET. Each test run (or fixture) starts a fresh container,
+applies the committed EF Core migration history, and uses `WebApplicationFactory`
+to host the API in-process.
 
-Tests must not depend on a developer's manually configured local database.
-
-The test database should be disposable and reproducible.
+Tests must not depend on a developer's manually configured local database or the
+Docker Compose development database. The test database must be disposable and
+reproducible.
 
 ## Devin Completion Rule
 

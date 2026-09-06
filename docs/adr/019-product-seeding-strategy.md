@@ -25,9 +25,11 @@ management mechanism.
 
 Use explicit, environment-specific product seeding.
 
-Development environments may load a small deterministic product catalog.
+Development environments may load a small deterministic product catalog when
+triggered by an explicit seed command or a development-only flag.
 
-Integration tests will create their own isolated test data.
+Integration tests will create their own isolated test data and must not depend
+on the development seed catalog.
 
 Production environments must not automatically receive development/sample
 products.
@@ -53,23 +55,21 @@ Each seeded product should include the MVP fields such as:
 - IsActive
 
 Seed identifiers should be deterministic where useful so developers and
-automated scenarios can refer to known products.
+automated scenarios can refer to known products. Each seed product uses a
+fixed deterministic ProductId and price that do not change between runs.
 
 ## Seed Execution
 
 Development seeding must be explicit.
 
-It may be implemented as:
+It is implemented as a dedicated, development-only seed command or flag
+(for example, a .NET CLI command or a development-only `DbSeeder` invoked
+explicitly).
 
-- a dedicated seed command
-- a development-only startup option
-- a small CLI/tooling command
-
+It must not run automatically during normal application startup.
 It must not silently populate production databases.
 
-The seed operation should be safe to run repeatedly.
-
-Where practical, it should be idempotent.
+The seed operation must be safe to run repeatedly and must be idempotent.
 
 ## Integration Tests
 

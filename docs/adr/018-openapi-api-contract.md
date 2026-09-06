@@ -20,7 +20,11 @@ Manually maintained endpoint documentation can easily become outdated.
 
 ## Decision
 
-Expose an OpenAPI document generated from the ASP.NET Core API.
+Expose an OpenAPI document generated from the ASP.NET Core API using the
+built-in `Microsoft.AspNetCore.OpenApi` package.
+
+Swashbuckle, NSwag, and other third-party OpenAPI tools are not introduced
+unless the built-in tooling proves insufficient.
 
 The OpenAPI contract should describe:
 
@@ -35,13 +39,14 @@ The OpenAPI contract should describe:
 The API implementation remains the source from which the OpenAPI document
 is generated.
 
+The OpenAPI JSON endpoint and any interactive documentation UI are enabled in
+Development by default. They may be enabled in other environments through
+explicit configuration, but are not enabled by default in Production.
+
 ## API Documentation
 
 Development environments should provide an interactive API documentation
-experience where appropriate.
-
-The exact UI implementation may use the tooling supported by the selected
-ASP.NET Core version.
+experience using the built-in ASP.NET Core OpenAPI tools.
 
 The OpenAPI JSON document must remain available independently of any UI.
 
@@ -65,11 +70,15 @@ Application/domain entities must not be exposed directly as API contracts.
 
 Endpoints should return explicit response DTOs.
 
-Example:
+MVP response DTOs:
 
-GetCartResponse
+- `ProductSummary`: `id`, `name`, `price`, `imageUrl`
+- `ProductDetail`: `id`, `name`, `description`, `price`, `imageUrl`, `isActive`
+- `CartResponse`: `id`, `items`, `total`, `currency`
+- `CartItemResponse`: `productId`, `name`, `unitPrice`, `quantity`, `lineTotal`
 
-rather than serializing the Cart aggregate directly.
+The `ETag` for optimistic concurrency is returned in the `ETag` response header,
+not in the response body.
 
 This allows the HTTP contract to evolve independently from internal domain
 representation.

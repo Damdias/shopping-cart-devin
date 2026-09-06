@@ -20,10 +20,11 @@ should produce useful operational signals.
 The application will use:
 
 - structured application logging
-- request/correlation identifiers
+- request/correlation identifiers supplied or generated from the `X-Correlation-Id` header
 - ASP.NET Core health checks
 - consistent error logging
 - logging scopes for request context
+- centralized `ProblemDetails` error mapping with stable, machine-readable `code` values
 
 The application should remain compatible with future OpenTelemetry-based
 metrics and tracing, but full distributed tracing is not required for the MVP.
@@ -69,17 +70,15 @@ and must not be treated as authenticated identity.
 
 ## Correlation / Request IDs
 
-Every incoming HTTP request should have a request identifier.
+Every incoming HTTP request should have a correlation identifier.
 
-If the client supplies an accepted correlation identifier, the application may
-reuse it.
+The client may supply one in the `X-Correlation-Id` header. If the header is
+missing or invalid, the application generates a new correlation identifier.
 
-Otherwise, the application generates one.
-
-The identifier should be included in:
+The identifier must be included in:
 
 - application log scope
-- error responses where appropriate
+- every `ProblemDetails` error response under `correlationId`
 - diagnostics for failed operations
 
 ## Error Logging
@@ -98,6 +97,19 @@ details.
 Domain objects should not perform logging directly.
 
 Logging belongs in application/API/infrastructure boundaries.
+
+## Error Mapping
+
+A centralized component maps application and domain exceptions to
+RFC-compatible `ProblemDetails` responses.
+
+Every error response includes:
+
+- `type`, `title`, `status`, and `detail`
+- `code`: a stable, machine-readable string identifying the error kind
+- `correlationId`: the request correlation identifier
+
+Domain objects must not depend on HTTP or `ProblemDetails` concepts.
 
 ## Health Checks
 

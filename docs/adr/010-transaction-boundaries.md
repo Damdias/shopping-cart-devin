@@ -40,8 +40,17 @@ Application handlers should:
 1. Load required state.
 2. Perform validation and orchestration.
 3. Invoke domain behavior.
-4. Persist changes.
-5. Call SaveChangesAsync once at the end where practical.
+4. Register aggregate changes with the appropriate repository.
+5. Call `IUnitOfWork.SaveChangesAsync()` once at the end where practical.
+
+`IUnitOfWork` is a minimal abstraction defined in `ShoppingCart.Application`
+and implemented in `ShoppingCart.Infrastructure` using EF Core's `DbContext`.
+It exposes a single `SaveChangesAsync(CancellationToken)` method that triggers
+EF Core's transactional `SaveChanges`.
+
+Repositories (`ICartRepository`, `IProductReader`) do not call `SaveChanges`
+internally. They load, add, or update aggregates; the handler commits the unit
+of work through `IUnitOfWork`.
 
 EF Core's normal SaveChanges transaction behavior should be used for
 single-database changes.
@@ -62,7 +71,9 @@ Load Cart
     ↓
 cart.AddItem(...)
     ↓
-SaveChangesAsync
+Register updated Cart with ICartRepository
+    ↓
+IUnitOfWork.SaveChangesAsync
     ↓
 Commit
 
@@ -108,7 +119,9 @@ Those concerns are outside the current MVP.
 
 - Long-running workflows may eventually require different consistency patterns.
 - Cross-system transactions are intentionally not supported.
-- Developers must avoid calling SaveChanges repeatedly inside one simple command.
+- Developers must commit through `IUnitOfWork` and avoid calling `SaveChanges`
+  repeatedly inside one simple command.
+- Requires a small `IUnitOfWork` abstraction to keep EF Core out of `Application`.
 
 ## Alternatives Considered
 
