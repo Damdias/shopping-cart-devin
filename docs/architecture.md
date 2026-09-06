@@ -1,0 +1,274 @@
+# Shopping Cart MVP Architecture
+
+This document describes the current architecture of the Shopping Cart MVP. It summarizes the accepted architectural decisions recorded in `docs/adr/` without duplicating their full rationale.
+
+## 1. Architecture Overview
+
+The Shopping Cart MVP is a **modular monolith** implemented in .NET. Application behavior is organized as **vertical slices** around individual use cases, while the solution uses separate .NET projects to enforce architectural boundaries at compile time. Data is persisted in **PostgreSQL** via **Entity Framework Core**, and the API is exposed through **ASP.NET Core Minimal APIs** with an explicit URL-based version and **ProblemDetails** error responses.
+
+Relevant ADRs: [ADR-001](adr/001-modular-monolith.md), [ADR-002](adr/002-vertical-slice-architecture.md), [ADR-003](adr/003-postgresql-and-ef-core.md), [ADR-005](adr/005-minimal-apis-and-problem-details.md), [ADR-008](adr/008-dotnet-project-boundaries.md).
+
+## 2. System Context
+
+The system serves anonymous customers through a client application (for example, a frontend or mobile app). Customers can browse a small read-only product catalog and manage a single active shopping cart. The backend stores product and cart data in PostgreSQL.
+
+No external services such as payment gateways, message brokers, or inventory systems are part of the MVP.
+
+## 3. Architecture Style
+
+The MVP uses two complementary styles:
+
+- **Modular monolith** ([ADR-001](adr/001-modular-monolith.md)): Product and Cart capabilities are separate logical modules, but the system deploys as a single unit and shares one PostgreSQL database.
+- **Vertical Slice Architecture** ([ADR-002](adr/002-vertical-slice-architecture.md)): Each use case is implemented as a vertical slice that groups request, handler, response, validation, and slice-specific errors together.
+
+## 4. Business Modules
+
+The system contains two business modules: **Products** and **Carts**.
+
+```
+Shopping Cart MVP
+├── Products
+│   ├── GetProducts
+│   └── GetProductById
+└── Carts
+    ├── CreateCart
+    ├── GetCart
+    ├── AddItem
+    ├── UpdateQuantity
+    ├── RemoveItem
+    └── ClearCart
+```
+
+- **Products** is read-only in the MVP. It provides product listing and product detail retrieval.
+- **Carts** is the primary write-heavy module. It allows creating or retrieving an active cart, adding and updating items, removing items, and clearing the cart.
+
+Each module is a logical boundary; the physical .NET project structure mirrors these boundaries inside the Application project.
+
+## 5. .NET Project Structure
+
+The solution is split into the following projects:
+
+```
+src/
+├── ShoppingCart.Api
+├── ShoppingCart.Application
+├── ShoppingCart.Domain
+└── ShoppingCart.Infrastructure
+
+tests/
+├── ShoppingCart.Domain.Tests
+└── ShoppingCart.IntegrationTests
+```
+
+- **ShoppingCart.Domain**: domain entities, value objects, aggregates, and domain identifier types.
+- **ShoppingCart.Application**: vertical slices for use cases, command/query handlers, validation, and persistence abstractions (interfaces).
+- **ShoppingCart.Infrastructure**: EF Core `DbContext`, mappings, migrations, PostgreSQL configuration, and implementations of persistence abstractions.
+- **ShoppingCart.Api**: Minimal API endpoint registration, HTTP request/response mapping, `ProblemDetails` mapping, and bootstrap configuration.
+- **ShoppingCart.Domain.Tests**: fast unit tests for domain behavior.
+- **ShoppingCart.IntegrationTests**: end-to-end tests for API and persistence behavior using a real PostgreSQL instance.
+
+## 6. Dependency Rules
+
+Dependencies point downward: each layer references the layer(s) below it.
+
+```
+Api
+├── Application
+└── Infrastructure
+        ↓
+    Application
+        ↓
+      Domain
+```
+
+Explicit rules:
+
+- `Api` references `Application` and `Infrastructure`.
+- `Infrastructure` references `Application` and `Domain`.
+- `Application` references `Domain` only.
+- `Domain` references no other application project.
+- **Domain must not reference `Infrastructure`, `Api`, EF Core, or ASP.NET Core.**
+
+## 7. Domain Model Boundaries
+
+- The **Cart** is the main rich domain aggregate ([ADR-004](adr/004-rich-domain-model-for-cart.md)). It owns cart invariants such as quantity limits, inactive-product rules, add/ update/ remove/ clear behavior, and preventing invalid state.
+- Product and Cart data are separate logical boundaries, even though they share one database.
+- Domain identifiers are strongly typed (for example, `ProductId`, `CartId`, `AnonymousCustomerId`) to avoid passing the wrong identifier to the wrong concept ([ADR-011](adr/011-identity-and-anonymous-carts.md)).
+- Identifiers use UUIDs, with UUIDv7 preferred for newly generated identifiers where practical.
+- The anonymous customer flow relies on a stable `AnonymousCustomerId` supplied by the client. One anonymous customer may have at most **one active cart** at a time.
+
+## 8. Application / Vertical Slice Organization
+
+Application code is organized by business capability and use case. Each slice lives in `ShoppingCart.Application` and contains its own request/command/query, handler, response DTO, validation, and application-specific errors.
+
+```
+ShoppingCart.Application/
+├── Products/
+│   ├── GetProducts/
+│   └── GetProductById/
+└── Carts/
+    ├── CreateCart/
+    ├── GetCart/
+    ├── AddItem/
+    ├── UpdateQuantity/
+    ├── RemoveItem/
+    └── ClearCart/
+```
+
+Application handlers orchestrate use cases but do not duplicate domain rules: they load required state, invoke domain behavior, persist changes, and map results to response DTOs.
+
+## 9. Persistence Architecture
+
+- **PostgreSQL and EF Core are infrastructure concerns** ([ADR-003](adr/003-postgresql-and-ef-core.md)).
+- Persistence implementations live in `ShoppingCart.Infrastructure`.
+- The Application layer depends on purpose-specific persistence abstractions, not on EF Core directly ([ADR-009](adr/009-persistence-abstractions.md)).
+- **Generic repositories are not used.** Abstractions are created only when they represent meaningful domain/application intent.
+- The Cart aggregate is persisted through an aggregate-oriented repository (`ICartRepository`).
+- Product reads use a product-specific read abstraction (`IProductReader`).
+- `CartItem` belongs to the Cart aggregate and is not persisted independently.
+
+## 10. Transaction and Concurrency Strategy
+
+- **Each command is treated as one logical transaction boundary** ([ADR-010](adr/010-transaction-boundaries.md)).
+- A handler loads required state, invokes domain behavior, and calls `SaveChangesAsync` once at the end where practical.
+- EF Core's normal transactional `SaveChanges` behavior is used; explicit database transactions are introduced only when a use case requires multiple persistence operations that cannot safely be committed through a single `SaveChanges`.
+- Cart updates use **optimistic concurrency**: each Cart has a concurrency version, and `SaveChanges` fails if the version has changed since the Cart was loaded. The API translates such conflicts into a `409 Conflict` `ProblemDetails` response ([ADR-007](adr/007-optimistic-concurrency.md)).
+- Database transactions must not be held open while calling external systems (out of scope for the MVP).
+
+> **Note:** `ADR-007` intentionally supersedes the `product.md` assumption that concurrent cart updates are out of scope and last-write-wins is acceptable. Cart updates are concurrency-sensitive.
+
+## 11. API Architecture
+
+- The API uses **ASP.NET Core Minimal APIs** ([ADR-005](adr/005-minimal-apis-and-problem-details.md)).
+- URL-based versioning starts at `v1` ([ADR-016](adr/016-api-versioning.md)). Example routes:
+  - `GET /api/v1/products`
+  - `GET /api/v1/products/{productId}`
+  - `POST /api/v1/carts`
+  - `GET /api/v1/carts/{cartId}`
+  - `POST /api/v1/carts/{cartId}/items`
+  - `PUT /api/v1/carts/{cartId}/items/{productId}`
+  - `DELETE /api/v1/carts/{cartId}/items/{productId}`
+  - `DELETE /api/v1/carts/{cartId}/items`
+- A new API version is introduced only for breaking contract changes.
+- **API contracts must not expose domain entities directly.** Endpoints return explicit response DTOs.
+- Domain and Application projects must not depend on API version numbers.
+
+> **Note:** `ADR-005` includes pre-versioning route examples without the `/v1` segment; `ADR-016` is the authoritative source for public route versioning, so all public routes are prefixed with `/api/v1/`.
+
+## 12. Validation and Error Handling
+
+Validation is split into two layers ([ADR-017](adr/017-validation-strategy.md)):
+
+1. **Request/Application validation**: required fields, malformed UUIDs, invalid request structure, and missing inputs.
+2. **Domain validation**: business invariants such as quantity limits and inactive-product rules. Domain invariants are enforced even when similar validation exists earlier in the pipeline.
+
+Application handlers may validate use-case conditions that require loading external state (for example, product exists, product is active, cart exists).
+
+All API errors use RFC-compatible `ProblemDetails` responses:
+
+- `400 Bad Request` for invalid input.
+- `404 Not Found` for missing products or carts.
+- `409 Conflict` for business-state or concurrency conflicts.
+
+Domain objects must not depend on HTTP concepts.
+
+## 13. Testing Strategy
+
+- Unit tests cover domain behavior and must not require PostgreSQL, HTTP, EF Core, or external infrastructure ([ADR-006](adr/006-testing-strategy.md)).
+- Integration tests verify behavior across application boundaries and run against a real PostgreSQL instance.
+- **Integration tests use isolated PostgreSQL containers** and must not depend on the developer's local Docker Compose database.
+- The test framework is xUnit.
+- A feature is not complete until the solution builds, unit tests pass, and relevant integration tests pass.
+
+## 14. Observability
+
+- Structured logging with named properties (not string concatenation) for identifiers such as `CartId`, `ProductId`, `AnonymousCustomerId`, `RequestId`, and `Operation` ([ADR-012](adr/012-observability-and-health-checks.md)).
+- Every incoming HTTP request carries a request/correlation identifier, included in log scope and error responses.
+- Expected business validation failures are not logged as critical errors; unexpected failures are logged with context and exception details.
+- Domain objects do not perform logging.
+- Health endpoints:
+  - `GET /health/live` — process is running.
+  - `GET /health/ready` — application can serve requests, including PostgreSQL connectivity.
+
+## 15. Configuration and Secrets
+
+- Configuration uses ASP.NET Core's standard configuration system ([ADR-013](adr/013-configuration-and-secrets.md)).
+- Sources may include `appsettings.json`, `appsettings.{Environment}.json`, environment variables, and .NET user secrets for local development.
+- **Secrets must not be committed to source control.**
+- Production secrets are injected through the deployment environment or a dedicated secret-management system.
+- Docker images must not contain environment-specific secrets.
+- Required configuration is validated during startup; the application fails fast when critical configuration is missing.
+- Secrets and full connection strings must not be written to logs.
+
+## 16. Local Development
+
+- Local infrastructure runs via **Docker Compose**, currently providing PostgreSQL ([ADR-014](adr/014-local-development-with-docker-compose.md)).
+- The ASP.NET Core API runs directly on the developer machine:
+  ```bash
+  docker compose up -d
+  dotnet run --project src/ShoppingCart.Api
+  ```
+- Integration tests are independent from the Docker Compose development database and manage their own disposable containers.
+- Docker images may be provided for deployment, but local development does not require rebuilding an API container after every code change.
+
+## 17. Database Migrations
+
+- Database schema evolution is managed with **EF Core migrations** in `ShoppingCart.Infrastructure` ([ADR-015](adr/015-database-migrations.md)).
+- Migrations are created intentionally, reviewed, and committed to source control.
+- **The application does not automatically apply pending migrations on startup.** Migrations are applied explicitly during local setup, deployment, or CI/CD.
+- Integration tests apply the migration history to their disposable PostgreSQL instance to verify that a new database can be created from committed migrations.
+- `EnsureCreated` is not the normal schema strategy.
+
+## 18. API Documentation
+
+- The API contract is exposed as an **OpenAPI** document generated from the ASP.NET Core API ([ADR-018](adr/018-openapi-api-contract.md)).
+- The OpenAPI contract describes routes, methods, request/response schemas, status codes, `ProblemDetails` responses, and the API version.
+- Development environments should provide an interactive API documentation experience, but the OpenAPI JSON document remains available independently of any UI.
+- Each endpoint defines sufficient metadata (operation name, response types, expected error codes) for the generated contract to be useful.
+
+## 19. Development/Test Data Seeding
+
+- Product seeding is explicit and environment-specific ([ADR-019](adr/019-product-seeding-strategy.md)).
+- Development uses a small deterministic catalog (for example, Laptop, Keyboard, Mouse, Monitor) with deterministic identifiers.
+- The seed operation is safe to run repeatedly and idempotent where practical.
+- **Production does not automatically receive development/sample products.**
+- Integration tests create their own isolated test data and do not depend on development seed data.
+- EF Core migrations are not used as a general mechanism for maintaining a changing product catalog.
+
+## 20. Key Architecture Constraints
+
+The following constraints are non-negotiable and derive directly from the accepted ADRs:
+
+- The system is a **modular monolith**.
+- Application behavior is organized as **vertical slices**.
+- The **Cart** is the main rich domain aggregate.
+- **Domain must not reference Infrastructure, API, EF Core, or ASP.NET Core.**
+- **PostgreSQL and EF Core are infrastructure concerns**.
+- **API contracts must not expose domain entities directly.**
+- **Each command is treated as one logical transaction boundary.**
+- **Generic repositories are not used.**
+- **Integration tests use isolated PostgreSQL containers.**
+
+## 21. ADR References
+
+| ADR | Title | Status | Short Decision Summary |
+| --- | --- | --- | --- |
+| [ADR-001](adr/001-modular-monolith.md) | Use a Modular Monolith | Accepted | Use a modular monolith for the MVP; Products and Carts remain logical modules. |
+| [ADR-002](adr/002-vertical-slice-architecture.md) | Use Vertical Slice Architecture | Accepted | Organize application behavior by feature/use case using vertical slices. |
+| [ADR-003](adr/003-postgresql-and-ef-core.md) | Use PostgreSQL with Entity Framework Core | Accepted | Use PostgreSQL and EF Core; Products and Carts share one database for the MVP. |
+| [ADR-004](adr/004-rich-domain-model-for-cart.md) | Use a Rich Domain Model for Cart | Accepted | Use a rich domain model for the Cart aggregate; application handlers orchestrate but do not duplicate domain rules. |
+| [ADR-005](adr/005-minimal-apis-and-problem-details.md) | Use Minimal APIs and ProblemDetails | Accepted | Use ASP.NET Core Minimal APIs and RFC-compatible ProblemDetails responses. |
+| [ADR-006](adr/006-testing-strategy.md) | Testing Strategy | Accepted | Use xUnit unit tests for domain behavior and integration tests against real PostgreSQL containers. |
+| [ADR-007](adr/007-optimistic-concurrency.md) | Use Optimistic Concurrency for Cart Updates | Accepted | Use optimistic concurrency for Cart persistence; conflicts return 409 Conflict. |
+| [ADR-008](adr/008-dotnet-project-boundaries.md) | Use Multiple .NET Projects with Clear Dependency Boundaries | Accepted | Use Api/Application/Domain/Infrastructure projects with compiler-enforced dependency rules. |
+| [ADR-009](adr/009-persistence-abstractions.md) | Use Purpose-Specific Persistence Abstractions | Accepted | Do not use generic repositories; create purpose-specific persistence abstractions only. |
+| [ADR-010](adr/010-transaction-boundaries.md) | Define Transactions Around Application Commands | Accepted | Treat one application command as one logical transaction boundary. |
+| [ADR-011](adr/011-identity-and-anonymous-carts.md) | Use UUID Identifiers and Anonymous Customer Identity | Accepted | Use UUID identifiers and an anonymous customer identity for one active cart per customer. |
+| [ADR-012](adr/012-observability-and-health-checks.md) | Use Structured Logging, Correlation IDs, and Health Checks | Accepted | Use structured logging, request/correlation IDs, and ASP.NET Core health checks. |
+| [ADR-013](adr/013-configuration-and-secrets.md) | Use Environment-Based Configuration and Keep Secrets Out of Source Control | Accepted | Use ASP.NET Core configuration; keep secrets out of source control. |
+| [ADR-014](adr/014-local-development-with-docker-compose.md) | Use Docker Compose for Local Infrastructure | Accepted | Use Docker Compose for local PostgreSQL; run the API directly via `dotnet run`. |
+| [ADR-015](adr/015-database-migrations.md) | Manage Database Schema with Explicit EF Core Migrations | Accepted | Use explicit EF Core migrations; do not automatically apply migrations on startup. |
+| [ADR-016](adr/016-api-versioning.md) | Use Explicit API Versioning | Accepted | Use URL-based API versioning starting with `v1`. |
+| [ADR-017](adr/017-validation-strategy.md) | Separate Request Validation from Domain Invariants | Accepted | Use two validation layers: request/application validation and domain invariants. |
+| [ADR-018](adr/018-openapi-api-contract.md) | Use OpenAPI as the API Contract | Accepted | Use OpenAPI as the API contract; endpoints return explicit DTOs, not domain entities. |
+| [ADR-019](adr/019-product-seeding-strategy.md) | Use Explicit Product Seeding for Development and Tests | Accepted | Use explicit product seeding for development and tests; disable automatic production seeding. |
